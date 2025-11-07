@@ -1,0 +1,129 @@
+trigger:
+  paths:
+    include:
+      - terraform/**
+  branches:
+    include:
+      - main
+
+stages:
+- stage: Ansible
+  displayName: "Install and configure Ansible"
+  jobs:
+  - job: Installation
+    displayName: "Install Ansible"
+    pool:
+      name: "linux-hosted-agent"
+
+    steps:
+    - script: |
+        sudo apt update
+        sudo apt install -y ansible sshpass
+      displayName: "Install Ansible & SSH dependencies"
+
+    - task: DownloadSecureFile@1
+      name: download_ssh_key
+      inputs:
+        secureFile: "id_ed25519"
+
+    - script: |
+        mkdir -p ~/.ssh
+        cp $(download_ssh_key.secureFilePath) ~/.ssh/id_ed25519
+        chmod 600 ~/.ssh/id_ed25519
+        echo "StrictHostKeyChecking no" > ~/.ssh/config
+      displayName: "Setup SSH Private Key"
+
+- stage: Terraform
+  displayName: 'Provision Infrastructure'
+  jobs:
+  - job: Terraform_Apply
+    displayName: 'Terraform Apply'
+    pool:
+          name: "linux-hosted-agent"
+    steps:
+
+    # 🗝️ Download the SSH public key from Azure DevOps secure files
+    - task: DownloadSecureFile@1
+      name: download_ssh_key
+      inputs:
+        secureFile: 'id_ed25519.pub'
+
+    - script: |
+        echo "Copying SSH public key into Terraform module"
+
+        mkdir -p ~/.ssh
+        cp $(download_ssh_key.secureFilePath) ~/.ssh/id_ed25519.pub
+
+        # Copy into Terraform compute module
+        cp $(download_ssh_key.secureFilePath) terraform/modules/ec2/id_ed25519.pub
+
+        echo "Listing contents of terraform/modules/ec2/"
+        ls -al terraform/modules/ec2/
+      displayName: 'Extract SSH Public Key for Terraform'
+
+    # 🔍 Diagnostic Step — Verify workspace structure
+    - script: |
+        echo "=== DEBUG INFO ==="
+        echo "Current working directory:"
+        pwd
+        echo ""
+        echo "Listing files recursively under terraform/:"
+        ls -R terraform
+        echo "==================="
+      displayName: "Debug: Verify Terraform path and workspace contents"
+
+    # 🧰 Ensure Terraform CLI is installed globally (fixed version)
+    - script: |
+        echo "Checking if Terraform is installed..."
+        if command -v terraform >/dev/null 2>&1; then
+          echo "✅ Terraform is already installed:"
+          terraform -version
+        else
+          echo "⚙️ Terraform not found — installing globally..."
+          TERRAFORM_VERSION="1.9.8"
+
+          sudo apt-get update -y
+          sudo apt-get install -y wget unzip
+
+          # 🧹 Fix: remove incorrect directory if it exists
+          if [ -d "/usr/local/bin/terraform" ]; then
+            echo "⚠️ Found /usr/local/bin/terraform as a directory — removing it..."
+            sudo rm -rf /usr/local/bin/terraform
+          fi
+
+          # Download and install Terraform
+          wget -q https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+          sudo unzip -o terraform_${TERRAFORM_VERSION}_linux_amd64.zip -d /usr/local/bin/
+          sudo chmod +x /usr/local/bin/terraform
+
+          echo "✅ Terraform installed successfully:"
+          terraform -version
+        fi
+      displayName: "Quick Check or Install Terraform"
+
+    # 🧪 Verify Terraform in PATH
+    - script: |
+        echo "Verifying Terraform binary..."
+        which terraform || echo "Terraform not found in PATH!"
+        terraform -version || echo "Terraform command failed!"
+      displayName: "Verify Terraform Installation"
+
+    # ☁️ Run Terraform within Azure CLI context
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: 'it-azure-connection'
+        scriptType: bash
+        scriptLocation: inlineScript
+        workingDirectory: $(System.DefaultWorkingDirectory)/terraform
+        inlineScript: |
+          echo "##[group]Terraform Init/Plan/Apply"
+          terraform init -input=false 
+          terraform plan -input=false -var-file="vars/dev.tfvars"
+          terraform apply -input=false -auto-approve -var-file="vars/dev.tfvars"
+          echo "##[endgroup]"
+          echo "Waiting 10 minutes before running Terraform destroy..."
+          sleep 600
+          echo "##[group]Terraform Destroy"
+          terraform destroy -input=false -auto-approve -var-file="vars/dev.tfvars"
+          echo "##[endgroup]"
+      displayName: "Terraform Apply via Azure CLI"
