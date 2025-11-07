@@ -1,0 +1,7 @@
+aws_region              = "us-east-1" 
+ec2_key_name            = "n-virg"
+projectname             = "epicbook"
+dbname                  = "bookstore"
+dbpass                  = "password1"
+dbuser                  = "admin1" 
+ami                     = "ami-0bbdd8c17ed981ef9" 
