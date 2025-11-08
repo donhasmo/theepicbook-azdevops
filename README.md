@@ -30,4 +30,4 @@ You should now see AWS listed.
 
 7. Terraform will create your infrastructure and ansible will configure the epicbook app.
 
-8. After 10 minutes, terraform will destroy the app as it is a practice project
+8. After 10 minutes, terraform will begin to destroy the resources as it is a practice project
